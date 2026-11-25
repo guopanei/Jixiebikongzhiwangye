@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>机械臂遥控 · BLE / 串口</title>
+<style>
+  :root{
+    --bg:#0f1216; --card:#181d24; --line:#2a323d;
+    --txt:#e8edf3; --dim:#8b98a8; --acc:#3ea6ff; --ok:#39d98a; --warn:#ffb020; --bad:#ff5d5d;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:var(--bg);color:var(--txt);
+       font:14px/1.4 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+       padding:10px 10px 28px;max-width:560px;margin:0 auto}
+  h1{font-size:17px;margin:4px 0 10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  h1 small{font-size:11px;color:var(--dim);font-weight:400}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+        padding:10px 12px;margin-bottom:10px}
+  .row{display:flex;align-items:center;gap:10px;margin:6px 0;flex-wrap:wrap}
+  .row label{flex:0 0 62px;color:var(--dim);font-size:12px}
+  .row .val{flex:0 0 44px;text-align:right;font-variant-numeric:tabular-nums;color:var(--acc)}
+  input[type=range]{flex:1;accent-color:var(--acc);height:26px}
+  select{background:#11161c;color:var(--txt);border:1px solid var(--line);
+         border-radius:8px;padding:8px}
+  button{background:#232b36;color:var(--txt);border:1px solid var(--line);
+         border-radius:10px;padding:10px 12px;font-size:13px;font-weight:600;flex:1}
+  button:active{transform:scale(.98)}
+  button.primary{background:var(--acc);color:#04121f;border-color:var(--acc)}
+  button.danger{background:#3a1d1d;border-color:#6b2b2b;color:#ffb3b3}
+  button.ok{background:#173a2a;border-color:#27614a;color:#a8f0cc}
+  button:disabled{opacity:.4}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+  .grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+  .stat{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;font-size:12px}
+  .stat div{background:#11161c;border:1px solid var(--line);border-radius:8px;
+            padding:6px;text-align:center}
+  .stat b{display:block;font-size:15px;color:var(--ok);font-variant-numeric:tabular-nums}
+  .stat span{color:var(--dim);font-size:10px}
+  #log{height:96px;overflow:auto;background:#0b0e12;border:1px solid var(--line);
+       border-radius:8px;padding:6px;font:11px/1.45 Consolas,monospace;color:#9fb0c3;
+       white-space:pre-wrap}
+  .dot{width:9px;height:9px;border-radius:50%;background:#555;display:inline-block}
+  .dot.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+  .hint{color:var(--dim);font-size:11px;margin-top:6px}
+  .tag{font-size:10px;border:1px solid var(--line);border-radius:6px;padding:2px 6px;color:var(--dim)}
+  .tag.on{color:var(--ok);border-color:#27614a}
+</style>
+</head>
+<body>
+
+<h1>机械臂遥控 <small>同一套页面 · 两种链路</small></h1>
+
+<div class="card">
+  <div class="row">
+    <span class="dot" id="dot"></span>
+    <span id="devname" style="flex:1">未连接</span>
+    <span class="tag" id="linkTag">--</span>
+  </div>
+  <div class="grid2" style="margin-top:8px">
+    <button class="primary" id="btnBle">连接 BLE（JDY-33）</button>
+    <button id="btnSer">连接串口（JDY-31/HC-05）</button>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <label>串口</label>
+    <select id="baud">
+      <option value="9600" selected>9600</option>
+      <option value="115200">115200</option>
+    </select>
+    <button id="btnDisc" style="flex:0 0 90px" disabled>断开</button>
+  </div>
+  <div class="hint" id="serialHint"></div>
+  <div class="stat" style="margin-top:8px">
+    <div><b id="stState">--</b><span>状态</span></div>
+    <div><b id="stPca">--</b><span>PCA9685</span></div>
+    <div><b id="stErr">--</b><span>故障码</span></div>
+  </div>
+</div>
+
+<div class="card">
+  <div style="font-weight:600;margin-bottom:6px">六轴角度（拖动即下发）</div>
+  <div id="joints"></div>
+  <div class="row" style="margin-top:10px">
+    <label>速度</label>
+    <input type="range" id="speed" min="5" max="100" value="40">
+    <span class="val" id="speedVal">40%</span>
+  </div>
+</div>
+
+<div class="card">
+  <div class="grid" style="margin-bottom:8px">
+    <button class="ok" data-cmd="HOME">回零</button>
+    <button data-cmd="STOP">停止</button>
+    <button class="danger" data-cmd="ESTOP">急停</button>
+  </div>
+  <div class="grid" style="margin-bottom:8px">
+    <button data-cmd="RESUME">解除急停</button>
+    <button data-cmd="G,0">夹爪张开</button>
+    <button data-cmd="G,1">夹爪闭合</button>
+  </div>
+  <div class="grid2">
+    <button data-cmd="PRESET,1">预设1 中位</button>
+    <button data-cmd="PRESET,2">预设2 预备</button>
+    <button data-cmd="PRESET,3">预设3 抓取</button>
+    <button data-cmd="PRESET,4">预设4 放置</button>
+  </div>
+  <div class="hint">急停会关断 PCA9685 全部输出；解除急停后自动慢速回零。</div>
+</div>
+
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+    <span style="font-weight:600">串口日志</span>
+    <button id="btnClear" style="flex:0 0 64px;padding:4px 8px;font-size:12px">清空</button>
+  </div>
+  <div id="log"></div>
+</div>
+
+<script>
+/* =========================================================================
+   两种链路，同一套协议：
+     BLE  (JDY-33 / HC-08 等)  -> Web Bluetooth，手机/电脑 Chrome 都能用
+     串口 (JDY-31 / HC-05 等)  -> Web Serial，仅桌面 Chrome/Edge（手机不支持）
+
+   注意：JDY-31、HC-05 是经典蓝牙 SPP，不是 BLE，手机浏览器没有 API 能连，
+   手机端只能用安卓 SPP 串口 App（如 Serial Bluetooth Terminal），命令完全一样。
+
+   协议：ASCII 命令行，\n 结尾
+     J<n>,<deg> / P,<6 个角度> / G,0|1 / S,<5~100> / HOME / STOP / ESTOP /
+     RESUME / PRESET,1~4 / Q / VER
+   状态帧：$S,state,j1..j6,speed,grip,bt,voice,omv,pca,oled,fault,uptime*CS
+   ========================================================================= */
+const SVC = '0000ffe0-0000-1000-8000-00805f9b34fb';
+const CHR = '0000ffe1-0000-1000-8000-00805f9b34fb';
+
+const STATES = ['INIT','SELFTEST','HOME','IDLE','MANUAL','ESTOP','FAULT'];
+const NAMES = ['J1 底座','J2 肩','J3 肘','J4 腕俯仰','J5 腕回转','J6 夹爪'];
+
+const $ = id => document.getElementById(id);
+const sliders = [], vals = [];
+let mode = null;            // 'ble' | 'serial'
+let bleDev = null, bleChar = null;
+let serialPort = null, serialWriter = null, serialReader = null, serialKeep = false;
+let lineBuf = '';
+let gotData = false;
+let bleQueue = Promise.resolve();   /* BLE 写队列：Chrome 同时只允许一个 GATT 操作 */
+
+/* ---------------- UI ---------------- */
+NAMES.forEach((n,i)=>{
+  const row=document.createElement('div'); row.className='row';
+  row.innerHTML = `<label>${n}</label>
+    <input type="range" min="0" max="180" step="1" value="90" data-i="${i}">
+    <span class="val" id="v${i}">90</span>`;
+  $('joints').appendChild(row);
+  const s=row.querySelector('input'), v=row.querySelector('span');
+  sliders.push(s); vals.push(v);
+  let t=null;
+  s.addEventListener('input', ()=>{ v.textContent=s.value; });
+  s.addEventListener('change', ()=> sendJoint(i, s.value));
+  s.addEventListener('input', ()=>{
+    if(t) return;
+    t=setTimeout(()=>{ t=null; sendJoint(i, s.value); },120);
+  });
+});
+$('speed').addEventListener('input', e=>{ $('speedVal').textContent=e.target.value+'%'; });
+$('speed').addEventListener('change', e=> send('S,'+e.target.value));
+document.querySelectorAll('button[data-cmd]').forEach(b=>{
+  b.addEventListener('click', ()=> send(b.dataset.cmd));
+});
+$('btnClear').onclick = ()=>{ $('log').textContent=''; };
+$('btnBle').onclick = ()=>{ mode==='ble' ? disconnect() : connectBle(); };
+$('btnSer').onclick = ()=>{ mode==='serial' ? disconnect() : connectSerial(); };
+$('btnDisc').onclick = disconnect;
+
+/* 手机浏览器没有 Web Serial，给个明确提示 */
+if(!('serial' in navigator)){
+  $('btnSer').disabled = true;
+  $('serialHint').textContent =
+    '当前浏览器不支持 Web Serial（手机 Chrome 不支持）。' +
+    'JDY-31/HC-05 请用安卓 SPP 终端 App；或换 JDY-33/HC-08 用 BLE 模式。';
+}else{
+  $('serialHint').textContent =
+    '串口模式：电脑先与 JDY-31/HC-05 配对（会生成 COM 口），再点"连接串口"选择该 COM 口。';
+}
+if(location.protocol === 'file:'){
+  $('serialHint').textContent += ' ⚠ 建议用 http://localhost 打开（file:// 下浏览器可能禁用蓝牙/串口）。';
+  log('提示：当前是 file:// 打开，建议用本地 http 服务或 HTTPS 站点。');
+}
+if(!('bluetooth' in navigator)){
+  $('btnBle').disabled = true;
+}
+
+/* ---------------- 日志 / 状态 ---------------- */
+function log(msg){
+  const t=new Date().toLocaleTimeString('zh-CN',{hour12:false});
+  $('log').textContent += `[${t}] ${msg}\n`;
+  $('log').scrollTop = $('log').scrollHeight;
+  if($('log').textContent.length > 8000) $('log').textContent = $('log').textContent.slice(-6000);
+}
+function setConnected(kind, name){
+  mode = kind;
+  $('dot').classList.toggle('on', !!kind);
+  $('devname').textContent = name || (kind ? '已连接' : '未连接');
+  $('linkTag').textContent = kind === 'ble' ? 'BLE' : (kind === 'serial' ? 'SERIAL' : '--');
+  $('linkTag').classList.toggle('on', !!kind);
+  $('btnBle').textContent = kind === 'ble' ? '断开 BLE' : '连接 BLE（JDY-33）';
+  $('btnSer').textContent = kind === 'serial' ? '断开串口' : '连接串口（JDY-31/HC-05）';
+  $('btnBle').disabled = (kind === 'serial') || !('bluetooth' in navigator);
+  $('btnSer').disabled = (kind === 'ble') || !('serial' in navigator);
+  $('btnDisc').disabled = !kind;
+}
+
+/* ---------------- 收数据 -> 按行分发 ---------------- */
+function onData(text){
+  gotData = true;
+  lineBuf += text;
+  let k;
+  while((k = lineBuf.indexOf('\n')) >= 0){
+    const line = lineBuf.slice(0,k).replace(/\r$/,'');
+    lineBuf = lineBuf.slice(k+1);
+    if(line) onLine(line);
+  }
+}
+function onLine(line){
+  log('← '+line);
+  if(!line.startsWith('$S,')) return;
+  const body = line.slice(1, line.indexOf('*'));
+  const f = body.split(',');
+  if(f.length < 17) return;
+  $('stState').textContent = STATES[+f[1]] || f[1];
+  for(let i=0;i<6;i++){
+    const deg = Math.round((+f[2+i])/10);
+    sliders[i].value = deg; vals[i].textContent = deg;
+  }
+  $('stPca').textContent = (+f[13]) ? 'OK' : 'NO';
+  const fault = +f[15];
+  $('stErr').textContent = '0x'+fault.toString(16).toUpperCase().padStart(2,'0');
+  $('speed').value = +f[8]; $('speedVal').textContent = f[8]+'%';
+}
+
+/* ---------------- BLE (JDY-33 / HC-08) ---------------- */
+async function connectBle(){
+  if(!navigator.bluetooth){ log('浏览器不支持 Web Bluetooth'); return; }
+  try{
+    log('请求 BLE 设备…（选 JDY-33 / HC-08）');
+    bleDev = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: [SVC]
+    });
+    bleDev.addEventListener('gattserverdisconnected', ()=>{
+      bleChar = null;
+      setConnected(null);
+      log('BLE 已断开');
+    });
+    const server = await bleDev.gatt.connect();
+    log('GATT 已连接，查找 FFE0 服务…');
+    let svc = null;
+    try{
+      svc = await server.getPrimaryService(SVC);
+    }catch(e){
+      log('没找到 FFE0 服务（'+e.message+'），实际服务列表：');
+      try{
+        const all = await server.getPrimaryServices();
+        for(const s of all) log('  svc '+s.uuid);
+      }catch(e2){ log('  列服务也失败：'+e2.message); }
+      throw e;
+    }
+    /* JDY-33/HC-08 有的固件是 FFE1 读写同一个特征，有的把通知放在 FFE2，
+       这里自动挑：优先 FFE1 写，通知用第一个带 notify 的特征。 */
+    const chrs = await svc.getCharacteristics();
+    const lower = c => c.uuid.toLowerCase();
+    let w = chrs.find(c => lower(c).indexOf('ffe1') >= 0) || chrs[0];
+    let n = w;
+    if (!(w.properties.notify || w.properties.indicate)) {
+      const c2 = chrs.find(c => (c.properties.notify || c.properties.indicate));
+      if (c2) n = c2;
+    }
+    bleChar = w;
+    try{ await n.startNotifications(); }catch(e){ log('通知订阅失败：'+e.message); }
+    n.addEventListener('characteristicvaluechanged', ev=>{
+      onData(new TextDecoder().decode(ev.target.value));
+    });
+    log('BLE 特征：写 '+w.uuid.slice(4,8)+'，通知 '+n.uuid.slice(4,8)+
+        '  属性['+(w.properties.write?'write ':'')+
+        (w.properties.writeWithoutResponse?'wwr ':'')+
+        (w.properties.notify?'notify ':'')+
+        (w.properties.indicate?'indicate':'')+']');
+    setConnected('ble', bleDev.name || 'BLE');
+    log('BLE 已连接 '+(bleDev.name||''));
+    gotData = false;
+    /* 连上后立刻发容易撞上 startNotifications，稍等再发 */
+    setTimeout(()=>{ send('VER'); send('Q'); }, 300);
+    setTimeout(()=>{ if(!gotData) log('提示：4 秒没收到任何数据，检查模块 TXD 是否接到 PA10、波特率 9600'); }, 4000);
+  }catch(e){
+    log('BLE 连接失败：'+e.message);
+    bleDev = null; setConnected(null);
+  }
+}
+
+/* ---------------- Web Serial (JDY-31 / HC-05) ---------------- */
+async function connectSerial(){
+  if(!('serial' in navigator)){ log('浏览器不支持 Web Serial'); return; }
+  try{
+    log('请求串口…（选 JDY-31/HC-05 配对生成的 COM 口）');
+    serialPort = await navigator.serial.requestPort();
+    const baud = parseInt($('baud').value, 10);
+    await serialPort.open({ baudRate: baud, dataBits: 8, stopBits: 1, parity: 'none', flowControl: 'none' });
+    serialWriter = serialPort.writable.getWriter();
+    serialKeep = true;
+    readSerialLoop();
+    setConnected('serial', (serialPort.getInfo && serialPort.getInfo().usbVendorId)
+                  ? '串口 '+baud : '串口 '+baud);
+    log('串口已打开 '+baud+' 8N1');
+    send('VER'); send('Q');
+  }catch(e){
+    log('串口打开失败：'+e.message);
+    /* 打开失败时把可能已经占用的句柄清掉，否则下次会报 "port already open" */
+    try{ if(serialWriter){ await serialWriter.close(); } }catch(_e){}
+    serialWriter = null;
+    try{ if(serialPort){ await serialPort.close(); } }catch(_e){}
+    serialPort = null;
+    serialKeep = false;
+    setConnected(null);
+  }
+}
+
+async function readSerialLoop(){
+  const dec = new TextDecoder();
+  while(serialKeep && serialPort && serialPort.readable){
+    serialReader = serialPort.readable.getReader();
+    try{
+      while(serialKeep){
+        const { value, done } = await serialReader.read();
+        if(done) break;
+        if(value) onData(dec.decode(value, { stream: true }));
+      }
+    }catch(e){
+      if(serialKeep) log('串口读错误：'+e.message);
+    }finally{
+      try{ serialReader.releaseLock(); }catch(e){}
+      serialReader = null;
+    }
+  }
+}
+
+/* ---------------- 断开 ---------------- */
+async function disconnect(){
+  if(mode === 'ble'){
+    try{ if(bleDev && bleDev.gatt.connected) bleDev.gatt.disconnect(); }catch(e){}
+    bleDev = null; bleChar = null;
+  }
+  if(mode === 'serial'){
+    serialKeep = false;
+    try{ if(serialReader) await serialReader.cancel(); }catch(e){}
+    try{ if(serialWriter){ await serialWriter.close(); } }catch(e){}
+    serialWriter = null;
+    try{ if(serialPort) await serialPort.close(); }catch(e){}
+    serialPort = null;
+  }
+  setConnected(null);
+  log('已断开');
+}
+
+/* ---------------- 发送 ---------------- */
+async function send(cmd){
+  const line = cmd + '\n';
+  if(mode === 'ble'){
+    if(!bleChar){ log('未连接，发送失败：'+cmd); return; }
+    bleQueue = bleQueue.then(async ()=>{
+      const data = new TextEncoder().encode(line);
+      if(bleChar.properties.writeWithoutResponse) await bleChar.writeValueWithoutResponse(data);
+      else await bleChar.writeValue(data);
+      log('→ '+cmd);
+    }).catch(e=>{ log('BLE 发送失败：'+e.message); });
+    return;
+  }
+  if(mode === 'serial'){
+    if(!serialWriter){ log('未连接，发送失败：'+cmd); return; }
+    try{
+      await serialWriter.write(new TextEncoder().encode(line));
+      log('→ '+cmd);
+    }catch(e){ log('串口发送失败：'+e.message); }
+    return;
+  }
+  log('未连接，发送失败：'+cmd);
+}
+const sendJoint = (i, deg) => send(`J${i+1},${deg}`);
+
+setConnected(null);
+</script>
+</body>
+</html>
